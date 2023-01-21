@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Timeout: 90
+    MemorySize: 2048
+
+Resources:
+  MyKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: "reddit-crypto-key"
+  SSMIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonKinesisFullAccess
+  WebServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref SSMIAMRole
+  RedditEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref WebServerInstanceProfile
+      ImageId: ami-0dc2d3e4c0f9ebd18
+      InstanceType: t2.micro
+      KeyName: !Ref MyKeyPair
+      Monitoring: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y python3
+          pip3 install asyncpraw
+          pip3 install boto3
+          cd /tmp
+          yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+  KinesisStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: reddit_comments
+      ShardCount: 1
+  InferenceFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      PackageType: Image
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          TRANSFORMERS_CACHE: "/tmp/hf_models_cache"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: reddit-crypto-table
+      Events:
+        StreamEvent:
+          Type: Kinesis
+          Properties:
+            StartingPosition: LATEST
+            Stream: !GetAtt KinesisStream.Arn
+            BatchSize: 100
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: ./inference
+      DockerTag: python3.9-v1
+  SentimentDataApi:
+    Type: AWS::Serverless::Api # More info about Api Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-api.html
+    Properties:
+      Name: reddit_sentiment
+      StageName: Prod
+  SentimentDataApiFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: rest_api/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: reddit-crypto-table
+      Events:
+        SentimentDataApi:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            RestApiId: !Ref SentimentDataApi
+            Path: /reddit_sentiment
+            Method: get
+  RedditCryptoTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: reddit-crypto-table
+      AttributeDefinitions:
+        - AttributeName: CommentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: CommentId
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 20
+        WriteCapacityUnits: 20
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  SentimentDataApi:
+    Description: "API Gateway endpoint URL for Prod stage for SentimentDataApi"
+    Value: !Sub "https://${SentimentDataApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/reddit_sentiment/"
+  
