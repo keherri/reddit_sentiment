@@ -10,12 +10,10 @@ Build a crypto Reddit comment sentiment classifier available via a basic REST AP
 - Budget of less than $100/month
 
 ## Set up
+- Run `distilbert_model_training.ipynb` and make sure the model and tokenizer folders are saved in `serverless/crypto-sentiment/inference`. These will be needed in the next steps for CloudFormation with SAM. If you don't have time to train the model, reach out to me and I'll send them over. 
 - Install Serverless Application Management (SAM) CLI [(install instructions)](!https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Use the instructions in `serverless/crypto-sentiment/README.md` to build your CloudFormation
 - The CloudFormation has been successfully build, use the `activate_reddit_stream.ipynb` notebook to start the stream and make requests to the API.
-
-To set up the pipeline, navigate to `serverless/crypto-sentiment`. In the `README.md` you'll see instructions in using
-
 
 ## Infrastructure
 
